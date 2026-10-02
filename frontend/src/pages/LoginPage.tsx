@@ -144,9 +144,7 @@ export default function LoginPage() {
         </form>
 
         <div style={{ marginTop: 18, color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
-          Need an account? <Link to="/register" style={{ color: '#7dd3fc', fontWeight: 700 }}>Create one</Link><br />
-          Demo admin: admin@smartguard.com / admin123<br />
-          Demo user: user@smartguard.com / smartguard123
+          Need an account? <Link to="/register" style={{ color: '#7dd3fc', fontWeight: 700 }}>Create one</Link>
         </div>
       </div>
     </div>
