@@ -1,6 +1,6 @@
 # SmartGuard
 
-SmartGuard is a property security dashboard with a React frontend and a .NET 8 API. It includes resident and administrator workspaces, property and event tracking, alerts, reports, and administrator email delivery through SMTP.
+SmartGuard is a home security and property monitoring dashboard with a React frontend and a .NET 8 API. It includes resident and administrator workspaces, property and event tracking, alerts, reports, and administrator email delivery through SMTP.
 
 ## Requirements
 
