@@ -1,0 +1,20 @@
+# .NET build output and IDE state
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Local database and user-uploaded files
+backend/SmartGuard.API/smartguard.db*
+backend/SmartGuard.API/wwwroot/uploads/
+
+# Local environment files and credentials
+.env
+.env.*
+!.env.example
