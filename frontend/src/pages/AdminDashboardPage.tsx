@@ -1,8 +1,8 @@
-import { Activity, ArrowRightLeft, BellRing, Building2, Filter, Fingerprint, Mail, Send, ShieldCheck, Users, X } from 'lucide-react';
+import { Activity, ArrowRightLeft, BellRing, Building2, CreditCard, Filter, Fingerprint, Mail, Send, ShieldCheck, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useNavigate } from 'react-router-dom';
-import { clearStoredSession, getAdminUserDetails, getDevices, getOverview, getProperties, getPropertyPhotoUrl, getProfilePhotoUrl, getUsers, sendUserEmail, sendUserReport, toggleUserBlock } from '../api';
+import { approveAdminSubscriptionPayment, clearStoredSession, getAdminBillingPayments, getAdminUserDetails, getDevices, getOverview, getProperties, getPropertyPhotoUrl, getProfilePhotoUrl, getUsers, sendUserEmail, sendUserReport, toggleUserBlock } from '../api';
 import type { AdminUserDetails, AuthUser, DashboardOverview, DeviceSummary, Property } from '../types';
 
 export default function AdminDashboardPage() {
@@ -11,9 +11,14 @@ export default function AdminDashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
+  const [recentPayments, setRecentPayments] = useState<Awaited<ReturnType<typeof getAdminBillingPayments>>>([]);
+  const [paymentNotice, setPaymentNotice] = useState('');
   const [selectedUser, setSelectedUser] = useState<AdminUserDetails | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
+  const [subscriptionActionMessage, setSubscriptionActionMessage] = useState('');
+  const [subscriptionActionError, setSubscriptionActionError] = useState('');
+  const [approvingPaymentId, setApprovingPaymentId] = useState<string | null>(null);
   const [reportTitle, setReportTitle] = useState('');
   const [reportBody, setReportBody] = useState('');
   const [reportMessage, setReportMessage] = useState('');
@@ -54,6 +59,41 @@ export default function AdminDashboardPage() {
     void getProperties().then(setProperties).catch(() => setError('Unable to load property portfolio.'));
   }, [navigate]);
 
+  useEffect(() => {
+    let isMounted = true;
+    let isFirstLoad = true;
+    let isLoadingPayments = false;
+    let knownPaymentIds = new Set<string>();
+
+    const refreshPayments = async () => {
+      if (isLoadingPayments) return;
+      isLoadingPayments = true;
+      try {
+        const payments = await getAdminBillingPayments();
+        if (!isMounted) return;
+        const freshPayments = payments.filter(({ payment }) => !knownPaymentIds.has(payment.id));
+        if (!isFirstLoad && freshPayments.length > 0) {
+          const latest = freshPayments[0];
+          setPaymentNotice(`Payment received: KSh ${latest.payment.amountKes.toLocaleString('en-KE')} from ${latest.user?.fullName ?? `User ${latest.payment.userId}`}.`);
+        }
+        knownPaymentIds = new Set(payments.map(({ payment }) => payment.id));
+        setRecentPayments(payments.slice(0, 5));
+        isFirstLoad = false;
+      } catch {
+        // Keep the latest successful payment list visible if polling briefly fails.
+      } finally {
+        isLoadingPayments = false;
+      }
+    };
+
+    void refreshPayments();
+    const timer = window.setInterval(() => void refreshPayments(), 15_000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   const filteredUsers = useMemo(() => users.filter(user => {
     const matchesFilter = filter === 'All'
       ? true
@@ -78,6 +118,10 @@ export default function AdminDashboardPage() {
     { label: 'Active devices', value: String(devices.length), icon: <Fingerprint size={16} /> },
   ], [devices.length, overview, users.length]);
 
+  const approvalTransaction = selectedUser?.subscription?.status === 'PENDING_APPROVAL'
+    ? selectedUser.paymentTransactions.find(transaction => transaction.status === 'SUCCEEDED' && transaction.planCode === selectedUser.subscription?.planCode)
+    : undefined;
+
   const handleToggleBlock = async (userId: number, isBlocked: boolean) => {
     await toggleUserBlock(userId, { isBlocked });
     await loadUsers();
@@ -86,6 +130,8 @@ export default function AdminDashboardPage() {
   const openUserDetails = async (user: AuthUser) => {
     setSelectedUser(null);
     setDetailError('');
+    setSubscriptionActionMessage('');
+    setSubscriptionActionError('');
     setReportMessage('');
     setEmailMessage('');
     setEmailError('');
@@ -96,6 +142,26 @@ export default function AdminDashboardPage() {
       setDetailError('Unable to load this user profile.');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const handleApproveSubscription = async (transactionId: string) => {
+    if (!selectedUser) return;
+    setApprovingPaymentId(transactionId);
+    setSubscriptionActionMessage('');
+    setSubscriptionActionError('');
+    try {
+      const result = await approveAdminSubscriptionPayment(transactionId);
+      setSelectedUser(await getAdminUserDetails(selectedUser.user.id));
+      setSubscriptionActionMessage(result.message);
+      void getAdminBillingPayments().then(setRecentPayments).catch(() => undefined);
+    } catch (failure: unknown) {
+      const message = failure && typeof failure === 'object' && 'response' in failure
+        ? (failure as { response?: { data?: { message?: string } } }).response?.data?.message
+        : undefined;
+      setSubscriptionActionError(message ?? 'Could not approve this subscription. Refresh the profile and try again.');
+    } finally {
+      setApprovingPaymentId(null);
     }
   };
 
@@ -172,6 +238,24 @@ export default function AdminDashboardPage() {
           </div>
         ))}
       </div>
+
+      <section className="admin-live-panel" style={{ marginBottom: 20 }}>
+        <div className="workspace-section-heading">
+          <div><p className="eyebrow">Billing activity</p><h2>Recent M-PESA payments</h2></div>
+          <Link className="admin-action-link" to="/admin/billing">View billing <CreditCard size={15} /></Link>
+        </div>
+        {paymentNotice && <p role="status" style={{ margin: '0 0 12px', color: '#bbf7d0', background: 'rgba(20,83,45,.3)', padding: 12, borderRadius: 10 }}>{paymentNotice}</p>}
+        {recentPayments.length === 0
+          ? <p style={{ color: '#94a3b8', margin: 0 }}>No confirmed subscription payments yet. This list refreshes automatically every 15 seconds.</p>
+          : <div style={{ display: 'grid', gap: 8 }}>
+            {recentPayments.map(({ payment, user }) => <div key={payment.id} className="device-row">
+              <span className="device-signal" />
+              <div><strong>{user?.fullName ?? `User ${payment.userId}`}</strong><span>{user?.email ?? 'Resident account'} · M-PESA receipt {payment.mpesaReceiptNumber}</span></div>
+              <div><strong>KSh {payment.amountKes.toLocaleString('en-KE')}</strong><span>{new Date(payment.paidAt).toLocaleString('en-KE')}</span></div>
+            </div>)}
+            <small style={{ color: '#64748b' }}>Confirmed payments · refreshes every 15 seconds</small>
+          </div>}
+      </section>
 
       <section className="admin-property-panel">
         <div className="workspace-section-heading"><div><p className="eyebrow">Property portfolio</p><h2>All properties</h2></div><span className="count-label">{properties.length} properties</span></div>
@@ -329,6 +413,28 @@ export default function AdminDashboardPage() {
                 <div><span>Last login IP</span><strong>{selectedUser.user.lastLoginIp ?? 'Not recorded'}</strong></div>
               </div>
             </div>
+            <section className="admin-user-section">
+              <div className="workspace-section-heading"><div><p className="eyebrow">Plan and payment approval</p><h3>Subscription</h3></div></div>
+              {selectedUser.subscription
+                ? <div style={{ display: 'grid', gap: 12 }}>
+                  <div className="system-stat-lines">
+                    <div><span>Plan</span><strong>{selectedUser.subscriptionPlan?.name ?? selectedUser.subscription.planCode}</strong></div>
+                    <div><span>Status</span><strong>{selectedUser.subscription.status.replace(/_/g, ' ')}</strong></div>
+                    <div><span>Paid period ends</span><strong>{selectedUser.subscription.currentPeriodEnd ? new Date(selectedUser.subscription.currentPeriodEnd).toLocaleDateString('en-KE') : 'Not started'}</strong></div>
+                  </div>
+                  {selectedUser.subscription.status === 'PENDING_APPROVAL' && <p style={{ margin: 0, color: '#fcd34d' }}>M-PESA confirmed this payment. Approve it to activate the plan.</p>}
+                  {subscriptionActionMessage && <p className="form-success" role="status">{subscriptionActionMessage}</p>}
+                  {subscriptionActionError && <p className="form-error" role="alert">{subscriptionActionError}</p>}
+                  {selectedUser.paymentTransactions.length > 0
+                    ? <div style={{ display: 'grid', gap: 8 }}>{selectedUser.paymentTransactions.map(transaction => <div key={transaction.id} className="device-row">
+                      <div><strong>{transaction.planCode} · KSh {transaction.amountKes.toLocaleString('en-KE')}</strong><span>{transaction.mpesaReceiptNumber ? `Receipt ${transaction.mpesaReceiptNumber}` : transaction.responseDescription ?? 'Awaiting M-PESA result'}</span></div>
+                      <div><strong>{transaction.status.replace(/_/g, ' ')}</strong><span>{new Date(transaction.completedAt ?? transaction.initiatedAt).toLocaleString('en-KE')}</span></div>
+                      {approvalTransaction?.id === transaction.id && <button className="primary-button" disabled={approvingPaymentId === transaction.id} onClick={() => void handleApproveSubscription(transaction.id)}>{approvingPaymentId === transaction.id ? 'Approving…' : 'Accept subscription'}</button>}
+                    </div>)}</div>
+                    : <div className="empty-state">No subscription payment attempts have been recorded.</div>}
+                </div>
+                : <div className="empty-state">This user has no subscription record yet.</div>}
+            </section>
             <section className="admin-user-section">
               <div className="workspace-section-heading"><div><p className="eyebrow">Owned portfolio</p><h3>{selectedUser.properties.length} properties · uploaded images</h3></div></div>
               <div className="admin-user-property-grid">

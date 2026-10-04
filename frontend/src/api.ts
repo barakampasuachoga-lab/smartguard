@@ -1,8 +1,8 @@
 import axios from 'axios';
-import type { AdminUserDetails, AlertItem, AuthUser, DashboardOverview, DeviceSummary, LoginRequest, LoginResponse, Property, PropertyCreateRequest, RegisterRequest, RegisterResponse, SecurityEvent, SystemSetting, ToggleUserBlockRequest, UpdateProfileRequest, UserReport } from './types';
+import type { AdminUserDetails, AlertItem, AuthUser, DashboardOverview, DeviceSummary, Invoice, LoginRequest, LoginResponse, PaymentTransaction, Property, PropertyCreateRequest, RegisterRequest, RegisterResponse, SecurityCheckIn, SecurityEvent, SecuritySchedule, SubscriptionPlan, SubscriptionSnapshot, SystemSetting, ToggleUserBlockRequest, TrustedContact, UpdateProfileRequest, UserReport, UserSubscription } from './types';
 
 const api = axios.create({
-  baseURL: 'http://localhost:5156/api',
+  baseURL: '/api',
 });
 
 export const getProfilePhotoUrl = (path?: string | null) => path
@@ -24,6 +24,14 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(response => response, error => {
+  if (error?.response?.status === 401 && localStorage.getItem('smartguard-token')) {
+    clearStoredSession();
+    if (window.location.pathname !== '/login') window.location.assign('/login');
+  }
+  return Promise.reject(error);
+});
+
 export const getStoredAuthToken = () => localStorage.getItem('smartguard-token');
 
 export const clearStoredSession = () => {
@@ -34,6 +42,66 @@ export const clearStoredSession = () => {
 export const loginUser = async (payload: LoginRequest): Promise<LoginResponse> => {
   const { data } = await api.post('/auth/login', payload);
   return data as LoginResponse;
+};
+
+export const requestPasswordReset = async (email: string): Promise<{ message: string }> => {
+  const { data } = await api.post<{ message: string }>('/auth/forgot-password', { email });
+  return data;
+};
+
+export const resetPassword = async (token: string, newPassword: string): Promise<{ message: string }> => {
+  const { data } = await api.post<{ message: string }>('/auth/reset-password', { token, newPassword });
+  return data;
+};
+
+export const getSubscriptionPlans = async (): Promise<SubscriptionPlan[]> => {
+  const { data } = await api.get<SubscriptionPlan[]>('/subscription/plans');
+  return data;
+};
+
+export const getMySubscription = async (): Promise<SubscriptionSnapshot> => {
+  const { data } = await api.get<SubscriptionSnapshot>('/subscription/me');
+  return data;
+};
+
+export const startSubscriptionCheckout = async (planCode: string, phoneNumber: string): Promise<{ id: string; status: string; plan: string; amountKes: number; phoneNumber: string; message: string }> => {
+  const { data } = await api.post('/subscription/checkout', { planCode, phoneNumber });
+  return data;
+};
+
+export const getPaymentTransaction = async (id: string): Promise<PaymentTransaction> => {
+  const { data } = await api.get<PaymentTransaction>(`/subscription/transactions/${id}`);
+  return data;
+};
+
+export const cancelSubscription = async (): Promise<{ message: string; subscription: UserSubscription }> => {
+  const { data } = await api.post('/subscription/cancel');
+  return data;
+};
+
+export interface AdminBillingSummary {
+  revenueThisMonthKes: number;
+  totalRevenueKes: number;
+  activeSubscriptions: number;
+  trialSubscriptions: number;
+  pastDueSubscriptions: number;
+  subscriptions: Array<{ id: number; userId: number; userName?: string | null; email?: string | null; plan?: string | null; status: string; trialEnd?: string | null; currentPeriodEnd?: string | null; cancelAtPeriodEnd: boolean }>;
+  latestPayments: Array<{ id: string; userId: number; amountKes: number; mpesaReceiptNumber: string; paidAt: string }>;
+}
+
+export interface AdminBillingPayment {
+  payment: { id: string; userId: number; subscriptionId: number; amountKes: number; mpesaReceiptNumber: string; paidAt: string };
+  user?: { fullName: string; email: string };
+}
+
+export const getAdminBillingSummary = async (): Promise<AdminBillingSummary> => {
+  const { data } = await api.get<AdminBillingSummary>('/subscription/admin/summary');
+  return data;
+};
+
+export const getAdminBillingPayments = async (): Promise<AdminBillingPayment[]> => {
+  const { data } = await api.get('/subscription/admin/payments');
+  return data;
 };
 
 export const registerUser = async (payload: RegisterRequest, profilePhoto: File): Promise<RegisterResponse> => {
@@ -70,6 +138,11 @@ export const getUsers = async (): Promise<AuthUser[]> => {
 
 export const getAdminUserDetails = async (id: number): Promise<AdminUserDetails> => {
   const { data } = await api.get<AdminUserDetails>(`/auth/users/${id}/details`);
+  return data;
+};
+
+export const approveAdminSubscriptionPayment = async (transactionId: string): Promise<{ message: string; subscription: UserSubscription }> => {
+  const { data } = await api.post<{ message: string; subscription: UserSubscription }>(`/subscription/admin/transactions/${transactionId}/approve`);
   return data;
 };
 
@@ -172,6 +245,11 @@ export const getAlerts = async (): Promise<AlertItem[]> => {
   return data;
 };
 
+export const getAlert = async (id: string): Promise<AlertItem> => {
+  const { data } = await api.get<AlertItem>(`/security/alerts/${id}`);
+  return data;
+};
+
 export const downloadSecurityReport = async () => {
   const response = await api.get('/security/reports', { responseType: 'blob' });
   const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -184,13 +262,47 @@ export const downloadSecurityReport = async () => {
   window.URL.revokeObjectURL(url);
 };
 
-export const acknowledgeAlert = async (id: string) => {
-  const { data } = await api.post(`/security/alerts/${id}/acknowledge`);
+export const acknowledgeAlert = async (id: string, comment?: string) => {
+  const { data } = await api.post<AlertItem>(`/security/alerts/${id}/acknowledge`, { comment });
   return data;
 };
 
-export const resolveAlert = async (id: string) => {
-  const { data } = await api.post<AlertItem>(`/security/alerts/${id}/resolve`);
+export const resolveAlert = async (id: string, resolutionNote?: string) => {
+  const { data } = await api.post<AlertItem>(`/security/alerts/${id}/resolve`, { resolutionNote });
+  return data;
+};
+
+export const getSecuritySchedule = async (id: string): Promise<SecuritySchedule> => {
+  const { data } = await api.get<SecuritySchedule>(`/security/properties/${encodeURIComponent(id)}/schedule`);
+  return data;
+};
+
+export const updateSecuritySchedule = async (id: string, schedule: SecuritySchedule): Promise<SecuritySchedule> => {
+  const { data } = await api.put<SecuritySchedule>(`/security/properties/${encodeURIComponent(id)}/schedule`, schedule);
+  return data;
+};
+
+export const getTrustedContacts = async (propertyId: string): Promise<TrustedContact[]> => {
+  const { data } = await api.get<TrustedContact[]>(`/security/properties/${encodeURIComponent(propertyId)}/trusted-contacts`);
+  return data;
+};
+
+export const addTrustedContact = async (propertyId: string, contact: Omit<TrustedContact, 'id' | 'propertyId'>): Promise<TrustedContact> => {
+  const { data } = await api.post<TrustedContact>(`/security/properties/${encodeURIComponent(propertyId)}/trusted-contacts`, contact);
+  return data;
+};
+
+export const removeTrustedContact = async (propertyId: string, contactId: number): Promise<void> => {
+  await api.delete(`/security/properties/${encodeURIComponent(propertyId)}/trusted-contacts/${contactId}`);
+};
+
+export const getSecurityCheckIns = async (propertyId: string): Promise<SecurityCheckIn[]> => {
+  const { data } = await api.get<SecurityCheckIn[]>(`/security/properties/${encodeURIComponent(propertyId)}/check-ins`);
+  return data;
+};
+
+export const createSecurityCheckIn = async (propertyId: string, note?: string): Promise<SecurityCheckIn> => {
+  const { data } = await api.post<SecurityCheckIn>(`/security/properties/${encodeURIComponent(propertyId)}/check-ins`, { note });
   return data;
 };
 

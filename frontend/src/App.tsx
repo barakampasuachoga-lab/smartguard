@@ -13,6 +13,11 @@ import RegisterPage from './pages/RegisterPage';
 import UserDashboardPage from './pages/UserDashboardPage';
 import ProfilePage from './pages/ProfilePage';
 import SettingsPage from './pages/SettingsPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import SubscriptionPage from './pages/SubscriptionPage';
+import BillingPage from './pages/BillingPage';
+import AdminBillingPage from './pages/AdminBillingPage';
 
 type AppRole = 'Administrator' | 'Resident User';
 
@@ -42,6 +47,8 @@ export default function App() {
       <Route path="/" element={<HomePage />} />
       <Route path="/about" element={<AboutPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route element={<RequireAuth roles={['Resident User']}><Layout /></RequireAuth>}>
         <Route path="/user-dashboard" element={<UserDashboardPage />} />
@@ -49,6 +56,7 @@ export default function App() {
       <Route element={<RequireAuth roles={['Administrator']}><Layout /></RequireAuth>}>
         <Route path="/admin-dashboard" element={<AdminDashboardPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/admin/billing" element={<AdminBillingPage />} />
       </Route>
       <Route element={<RequireAuth><Layout /></RequireAuth>}>
         <Route path="/properties" element={<PropertiesPage />} />
@@ -57,6 +65,8 @@ export default function App() {
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/overview" element={<OverviewPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/subscription" element={<SubscriptionPage />} />
+        <Route path="/billing" element={<BillingPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -1,4 +1,4 @@
-import { Activity, Bell, Building2, ChartNoAxesCombined, House, LogOut, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react';
+import { Activity, Bell, Building2, ChartNoAxesCombined, CreditCard, House, LogOut, ReceiptText, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { clearStoredSession, getProfilePhotoUrl } from '../api';
@@ -7,7 +7,7 @@ const commonItems = [
   { label: 'Properties', to: '/properties', icon: Building2 },
   { label: 'Events', to: '/activities', icon: Activity },
   { label: 'Alerts', to: '/alerts', icon: Bell },
-  { label: 'Analytics', to: '/overview', icon: ChartNoAxesCombined },
+  { label: 'Intelligence', to: '/overview', icon: ShieldCheck },
   { label: 'Reports', to: '/reports', icon: ChartNoAxesCombined },
   { label: 'Profile', to: '/profile', icon: UserRound },
 ];
@@ -33,8 +33,11 @@ export default function Layout() {
     '/activities': 'Security events',
     '/alerts': 'Alerts',
     '/reports': 'Reports',
-    '/overview': 'Analytics',
+    '/overview': 'Security intelligence',
     '/profile': 'Profile settings',
+    '/subscription': 'Subscription',
+    '/billing': 'Billing history',
+    '/admin/billing': 'Billing & subscriptions',
   };
 
   const signOut = () => {
@@ -60,11 +63,21 @@ export default function Layout() {
           {isAdmin && <NavLink to="/settings" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
             <Settings2 size={17} /><span>System settings</span>
           </NavLink>}
+          {isAdmin && <NavLink to="/admin/billing" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <CreditCard size={17} /><span>Billing admin</span>
+          </NavLink>}
           {commonItems.map(({ label, to, icon: Icon }) => (
             <NavLink key={to} to={to} className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
               <Icon size={17} /><span>{label}</span>
             </NavLink>
           ))}
+          <div className="sidebar-label" style={{ marginTop: 14 }}>Account</div>
+          <NavLink to="/subscription" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <CreditCard size={17} /><span>Subscription</span>
+          </NavLink>
+          <NavLink to="/billing" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <ReceiptText size={17} /><span>Billing</span>
+          </NavLink>
         </nav>
         <div className="sidebar-account">
           <div className="account-avatar">{user.profilePhotoUrl ? <img src={getProfilePhotoUrl(user.profilePhotoUrl) ?? undefined} alt="" /> : fullName?.trim().charAt(0) || 'S'}</div>

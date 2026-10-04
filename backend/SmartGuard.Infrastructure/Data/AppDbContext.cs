@@ -15,6 +15,14 @@ public class AppDbContext : DbContext
     public DbSet<UserAccount> UserAccounts { get; set; }
     public DbSet<SystemSetting> SystemSettings { get; set; }
     public DbSet<UserReport> UserReports { get; set; }
+    public DbSet<TrustedContact> TrustedContacts { get; set; }
+    public DbSet<SecurityCheckIn> SecurityCheckIns { get; set; }
+    public DbSet<PasswordResetToken> PasswordResetTokens { get; set; }
+    public DbSet<SubscriptionPlan> SubscriptionPlans { get; set; }
+    public DbSet<UserSubscription> Subscriptions { get; set; }
+    public DbSet<PaymentTransaction> PaymentTransactions { get; set; }
+    public DbSet<Payment> Payments { get; set; }
+    public DbSet<Invoice> Invoices { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -51,6 +59,84 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.SecurityEventId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TrustedContact>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).IsRequired().HasMaxLength(160);
+            entity.Property(x => x.Relationship).IsRequired().HasMaxLength(80);
+            entity.Property(x => x.Email).HasMaxLength(200);
+            entity.HasOne<Property>().WithMany().HasForeignKey(x => x.PropertyId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SecurityCheckIn>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.UserName).IsRequired().HasMaxLength(200);
+            entity.Property(x => x.Note).HasMaxLength(1000);
+            entity.HasOne<Property>().WithMany().HasForeignKey(x => x.PropertyId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PasswordResetToken>(entity =>
+        {
+            entity.HasKey(x => x.TokenHash);
+            entity.Property(x => x.TokenHash).HasMaxLength(64);
+            entity.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserAccountId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.UserAccountId, x.ExpiresAt });
+        });
+
+        modelBuilder.Entity<SubscriptionPlan>(entity =>
+        {
+            entity.HasKey(x => x.Code);
+            entity.Property(x => x.Code).HasMaxLength(24);
+            entity.Property(x => x.Name).IsRequired().HasMaxLength(48);
+        });
+
+        modelBuilder.Entity<UserSubscription>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<SubscriptionPlan>().WithMany().HasForeignKey(x => x.PlanCode).OnDelete(DeleteBehavior.Restrict);
+            entity.Property(x => x.Status).IsRequired().HasMaxLength(24);
+            entity.HasIndex(x => new { x.UserId, x.Status });
+        });
+
+        modelBuilder.Entity<PaymentTransaction>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<UserSubscription>().WithMany().HasForeignKey(x => x.SubscriptionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<SubscriptionPlan>().WithMany().HasForeignKey(x => x.PlanCode).OnDelete(DeleteBehavior.Restrict);
+            entity.Property(x => x.PhoneNumber).IsRequired().HasMaxLength(16);
+            entity.Property(x => x.Status).IsRequired().HasMaxLength(24);
+            entity.Property(x => x.CheckoutRequestId).HasMaxLength(128);
+            entity.Property(x => x.MpesaReceiptNumber).HasMaxLength(40);
+            entity.HasIndex(x => x.CheckoutRequestId).IsUnique();
+        });
+
+        modelBuilder.Entity<Payment>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasOne<PaymentTransaction>().WithMany().HasForeignKey(x => x.PaymentTransactionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<UserSubscription>().WithMany().HasForeignKey(x => x.SubscriptionId).OnDelete(DeleteBehavior.Restrict);
+            entity.Property(x => x.MpesaReceiptNumber).IsRequired().HasMaxLength(40);
+            entity.HasIndex(x => x.PaymentTransactionId).IsUnique();
+            entity.HasIndex(x => x.MpesaReceiptNumber).IsUnique();
+        });
+
+        modelBuilder.Entity<Invoice>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasOne<Payment>().WithMany().HasForeignKey(x => x.PaymentId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<UserSubscription>().WithMany().HasForeignKey(x => x.SubscriptionId).OnDelete(DeleteBehavior.Restrict);
+            entity.Property(x => x.InvoiceNumber).IsRequired().HasMaxLength(40);
+            entity.Property(x => x.Currency).IsRequired().HasMaxLength(3);
+            entity.HasIndex(x => x.InvoiceNumber).IsUnique();
+            entity.HasIndex(x => x.PaymentId).IsUnique();
         });
 
         modelBuilder.Entity<Property>()

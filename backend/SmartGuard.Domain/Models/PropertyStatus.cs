@@ -5,5 +5,7 @@ public enum PropertyStatus
     Home,
     Away,
     Vacation,
-    Maintenance
+    Maintenance,
+    Sleep,
+    Night
 }

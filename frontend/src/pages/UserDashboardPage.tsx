@@ -46,6 +46,7 @@ export default function UserDashboardPage() {
         <aside className="resident-quick-links">
           <p className="eyebrow">Quick access</p><h2>Stay in control.</h2>
           <Link to="/alerts"><span><CircleAlert size={17} /> Review alerts</span><ArrowRight size={15} /></Link>
+          <Link to="/overview"><span><ShieldCheck size={17} /> Security intelligence</span><ArrowRight size={15} /></Link>
           <Link to="/reports"><span><Activity size={17} /> View reports</span><ArrowRight size={15} /></Link>
           <Link to="/profile"><span><ShieldCheck size={17} /> Manage profile</span><ArrowRight size={15} /></Link>
         </aside>

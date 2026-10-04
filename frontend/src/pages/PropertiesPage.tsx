@@ -136,6 +136,8 @@ export default function PropertiesPage() {
           <label>Security status<select value={status} onChange={(e) => setStatus(e.target.value as PropertyStatus)}>
               <option value="Home">Home</option>
               <option value="Away">Away</option>
+              <option value="Sleep">Sleep</option>
+              <option value="Night">Night</option>
               <option value="Vacation">Vacation</option>
               <option value="Maintenance">Maintenance</option>
             </select></label>

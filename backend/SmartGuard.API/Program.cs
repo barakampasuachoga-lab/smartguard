@@ -54,13 +54,31 @@ var jwtKey = builder.Configuration["Jwt:Key"] ?? "SmartGuard-Local-Development-K
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SmartGuard";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "SmartGuardUsers";
 
+var postgresConnection = builder.Configuration.GetConnectionString("Postgres");
+var usePostgres = string.Equals(builder.Configuration["Database:Provider"], "Postgres", StringComparison.OrdinalIgnoreCase)
+    || !string.IsNullOrWhiteSpace(postgresConnection);
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=smartguard.db"));
+{
+    if (usePostgres)
+    {
+        options.UseNpgsql(postgresConnection ?? builder.Configuration.GetConnectionString("DefaultConnection")
+            ?? throw new InvalidOperationException("Set ConnectionStrings:Postgres when Database:Provider is Postgres."));
+    }
+    else
+    {
+        options.UseSqlite(builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=smartguard.db");
+    }
+});
 
 builder.Services.AddScoped<ISecurityDashboardDataSource, AppDbContextSecurityDashboardDataSource>();
 builder.Services.AddScoped<SecurityDashboardService>();
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddScoped<SmtpEmailSender>();
+builder.Services.AddScoped<SubscriptionService>();
+builder.Services.AddHttpClient(nameof(DarajaStkPushClient), client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddSingleton<DarajaStkPushClient>();
+builder.Services.AddHostedService<SubscriptionExpiryService>();
+builder.Services.AddHostedService<SmartGuard.API.Services.AlertEscalationService>();
 
 builder.Services.AddCors(options =>
 {
@@ -101,6 +119,29 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+    if (db.Database.IsSqlite())
+    {
+    EnsureSqliteColumn(db, "Properties", "SecurityScheduleJson", "TEXT NOT NULL DEFAULT ''");
+    EnsureSqliteColumn(db, "Alerts", "AlertType", "TEXT NOT NULL DEFAULT 'Security anomaly'");
+    EnsureSqliteColumn(db, "Alerts", "AcknowledgedByUserId", "INTEGER NULL");
+    EnsureSqliteColumn(db, "Alerts", "AcknowledgedBy", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "AcknowledgedAt", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "AcknowledgementComment", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "ResolvedByUserId", "INTEGER NULL");
+    EnsureSqliteColumn(db, "Alerts", "ResolvedBy", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "ResolvedAt", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "ResolutionNote", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "EscalatedAt", "TEXT NULL");
+    EnsureSqliteColumn(db, "Alerts", "EscalationDetails", "TEXT NULL");
+    db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS TrustedContacts (Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, PropertyId TEXT NOT NULL, Name TEXT NOT NULL, Relationship TEXT NOT NULL, Email TEXT NULL, Days TEXT NOT NULL, StartTime TEXT NOT NULL, EndTime TEXT NOT NULL, IsActive INTEGER NOT NULL, CreatedAt TEXT NOT NULL, CONSTRAINT FK_TrustedContacts_Properties_PropertyId FOREIGN KEY (PropertyId) REFERENCES Properties (Id) ON DELETE CASCADE)");
+    db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_TrustedContacts_PropertyId ON TrustedContacts (PropertyId)");
+    db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS SecurityCheckIns (Id TEXT NOT NULL PRIMARY KEY, PropertyId TEXT NOT NULL, UserId INTEGER NOT NULL, UserName TEXT NOT NULL, Note TEXT NULL, CreatedAt TEXT NOT NULL, CONSTRAINT FK_SecurityCheckIns_Properties_PropertyId FOREIGN KEY (PropertyId) REFERENCES Properties (Id) ON DELETE CASCADE, CONSTRAINT FK_SecurityCheckIns_UserAccounts_UserId FOREIGN KEY (UserId) REFERENCES UserAccounts (Id) ON DELETE CASCADE)");
+    db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_SecurityCheckIns_PropertyId_CreatedAt ON SecurityCheckIns (PropertyId, CreatedAt)");
+    if (db.Database.IsSqlite())
+    {
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS PasswordResetTokens (TokenHash TEXT NOT NULL PRIMARY KEY, UserAccountId INTEGER NOT NULL, CreatedAt TEXT NOT NULL, ExpiresAt TEXT NOT NULL, UsedAt TEXT NULL, CONSTRAINT FK_PasswordResetTokens_UserAccounts_UserAccountId FOREIGN KEY (UserAccountId) REFERENCES UserAccounts (Id) ON DELETE CASCADE)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_PasswordResetTokens_UserAccountId_ExpiresAt ON PasswordResetTokens (UserAccountId, ExpiresAt)");
+    }
     db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS SystemSettings (Name TEXT NOT NULL PRIMARY KEY, Value TEXT NOT NULL, UpdatedAt TEXT NOT NULL)");
     db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS UserReports (Id INTEGER NOT NULL CONSTRAINT PK_UserReports PRIMARY KEY AUTOINCREMENT, RecipientUserId INTEGER NOT NULL, SenderUserId INTEGER NOT NULL, Title TEXT NOT NULL, Body TEXT NOT NULL, CreatedAt TEXT NOT NULL, IsRead INTEGER NOT NULL, ReadAt TEXT NULL, CONSTRAINT FK_UserReports_Recipient FOREIGN KEY (RecipientUserId) REFERENCES UserAccounts (Id) ON DELETE CASCADE, CONSTRAINT FK_UserReports_Sender FOREIGN KEY (SenderUserId) REFERENCES UserAccounts (Id) ON DELETE RESTRICT)");
     db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_UserReports_RecipientUserId_CreatedAt ON UserReports (RecipientUserId, CreatedAt)");
@@ -165,6 +206,8 @@ using (var scope = app.Services.CreateScope())
     {
         db.Database.ExecuteSqlRaw("ALTER TABLE UserAccounts ADD COLUMN ProfilePhotoUrl TEXT NULL");
     }
+    }
+    EnsureBillingSchema(db);
 
     var adminUser = db.UserAccounts.FirstOrDefault(x => x.Email == "admin@smartguard.com" || x.Email == "barakampasuachoga@gmail.com" || x.Role == "Administrator");
 
@@ -216,6 +259,15 @@ using (var scope = app.Services.CreateScope())
         });
     }
 
+    db.SaveChanges();
+
+    foreach (var plan in SubscriptionService.Plans)
+    {
+        if (!db.SubscriptionPlans.Any(x => x.Code == plan.Code))
+        {
+            db.SubscriptionPlans.Add(plan);
+        }
+    }
     db.SaveChanges();
 
     if (app.Environment.IsDevelopment())
@@ -328,7 +380,9 @@ using (var scope = app.Services.CreateScope())
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
+    // Emit the Swagger 2.0 format for compatibility with consumers that do not
+    // accept the generated OpenAPI 3.x document.
+    app.UseSwagger(options => options.SerializeAsV2 = true);
     app.UseSwaggerUI(options =>
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "SmartGuard.API v1");
@@ -343,3 +397,71 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+static void EnsureSqliteColumn(AppDbContext db, string table, string column, string definition)
+{
+    db.Database.OpenConnection();
+    var hasColumn = false;
+    try
+    {
+        using var command = db.Database.GetDbConnection().CreateCommand();
+        command.CommandText = $"PRAGMA table_info('{table}')";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.GetString(1) == column) { hasColumn = true; break; }
+        }
+    }
+    finally { db.Database.CloseConnection(); }
+
+    if (!hasColumn)
+    {
+        db.Database.OpenConnection();
+        try
+        {
+            using var command = db.Database.GetDbConnection().CreateCommand();
+            command.CommandText = $"ALTER TABLE \"{table}\" ADD COLUMN \"{column}\" {definition}";
+            command.ExecuteNonQuery();
+        }
+        finally { db.Database.CloseConnection(); }
+    }
+}
+
+static void EnsureBillingSchema(AppDbContext db)
+{
+    if (db.Database.IsSqlite())
+    {
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS PasswordResetTokens (TokenHash TEXT NOT NULL PRIMARY KEY, UserAccountId INTEGER NOT NULL, CreatedAt TEXT NOT NULL, ExpiresAt TEXT NOT NULL, UsedAt TEXT NULL, CONSTRAINT FK_PasswordResetTokens_UserAccounts_UserAccountId FOREIGN KEY (UserAccountId) REFERENCES UserAccounts (Id) ON DELETE CASCADE)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_PasswordResetTokens_UserAccountId_ExpiresAt ON PasswordResetTokens (UserAccountId, ExpiresAt)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS SubscriptionPlans (Code TEXT NOT NULL PRIMARY KEY, Name TEXT NOT NULL, PriceKes INTEGER NOT NULL, MaxProperties INTEGER NOT NULL, MaxDevices INTEGER NOT NULL, AnomalyDetection INTEGER NOT NULL, Analytics INTEGER NOT NULL, IncidentManagement INTEGER NOT NULL, SecurityIntelligence INTEGER NOT NULL, MultipleStaffAccounts INTEGER NOT NULL, AdvancedReports INTEGER NOT NULL, PrioritySupport INTEGER NOT NULL)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS Subscriptions (Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, UserId INTEGER NOT NULL, PlanCode TEXT NOT NULL, Status TEXT NOT NULL, TrialStart TEXT NULL, TrialEnd TEXT NULL, CurrentPeriodStart TEXT NULL, CurrentPeriodEnd TEXT NULL, CancelAtPeriodEnd INTEGER NOT NULL, CreatedAt TEXT NOT NULL, UpdatedAt TEXT NOT NULL, CONSTRAINT FK_Subscriptions_UserAccounts_UserId FOREIGN KEY (UserId) REFERENCES UserAccounts (Id) ON DELETE CASCADE, CONSTRAINT FK_Subscriptions_SubscriptionPlans_PlanCode FOREIGN KEY (PlanCode) REFERENCES SubscriptionPlans (Code) ON DELETE RESTRICT)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS IX_Subscriptions_UserId_Status ON Subscriptions (UserId, Status)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS PaymentTransactions (Id TEXT NOT NULL PRIMARY KEY, UserId INTEGER NOT NULL, SubscriptionId INTEGER NOT NULL, PlanCode TEXT NOT NULL, AmountKes INTEGER NOT NULL, PhoneNumber TEXT NOT NULL, Status TEXT NOT NULL, MerchantRequestId TEXT NULL, CheckoutRequestId TEXT NULL, ResponseDescription TEXT NULL, ResultCode INTEGER NULL, MpesaReceiptNumber TEXT NULL, InitiatedAt TEXT NOT NULL, CompletedAt TEXT NULL, CONSTRAINT FK_PaymentTransactions_UserAccounts_UserId FOREIGN KEY (UserId) REFERENCES UserAccounts (Id) ON DELETE CASCADE, CONSTRAINT FK_PaymentTransactions_Subscriptions_SubscriptionId FOREIGN KEY (SubscriptionId) REFERENCES Subscriptions (Id) ON DELETE RESTRICT, CONSTRAINT FK_PaymentTransactions_SubscriptionPlans_PlanCode FOREIGN KEY (PlanCode) REFERENCES SubscriptionPlans (Code) ON DELETE RESTRICT)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_PaymentTransactions_CheckoutRequestId ON PaymentTransactions (CheckoutRequestId)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_PaymentTransactions_MpesaReceiptNumber ON PaymentTransactions (MpesaReceiptNumber)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS Payments (Id TEXT NOT NULL PRIMARY KEY, PaymentTransactionId TEXT NOT NULL, UserId INTEGER NOT NULL, SubscriptionId INTEGER NOT NULL, AmountKes INTEGER NOT NULL, MpesaReceiptNumber TEXT NOT NULL, PaidAt TEXT NOT NULL, CONSTRAINT FK_Payments_PaymentTransactions_PaymentTransactionId FOREIGN KEY (PaymentTransactionId) REFERENCES PaymentTransactions (Id) ON DELETE RESTRICT, CONSTRAINT FK_Payments_UserAccounts_UserId FOREIGN KEY (UserId) REFERENCES UserAccounts (Id) ON DELETE CASCADE, CONSTRAINT FK_Payments_Subscriptions_SubscriptionId FOREIGN KEY (SubscriptionId) REFERENCES Subscriptions (Id) ON DELETE RESTRICT)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Payments_PaymentTransactionId ON Payments (PaymentTransactionId)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Payments_MpesaReceiptNumber ON Payments (MpesaReceiptNumber)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS Invoices (Id TEXT NOT NULL PRIMARY KEY, InvoiceNumber TEXT NOT NULL, PaymentId TEXT NOT NULL, UserId INTEGER NOT NULL, SubscriptionId INTEGER NOT NULL, AmountKes INTEGER NOT NULL, Currency TEXT NOT NULL, IssuedAt TEXT NOT NULL, CONSTRAINT FK_Invoices_Payments_PaymentId FOREIGN KEY (PaymentId) REFERENCES Payments (Id) ON DELETE RESTRICT, CONSTRAINT FK_Invoices_UserAccounts_UserId FOREIGN KEY (UserId) REFERENCES UserAccounts (Id) ON DELETE CASCADE, CONSTRAINT FK_Invoices_Subscriptions_SubscriptionId FOREIGN KEY (SubscriptionId) REFERENCES Subscriptions (Id) ON DELETE RESTRICT)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Invoices_InvoiceNumber ON Invoices (InvoiceNumber)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS IX_Invoices_PaymentId ON Invoices (PaymentId)");
+        return;
+    }
+
+    if (db.Database.IsNpgsql())
+    {
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"PasswordResetTokens\" (\"TokenHash\" character varying(64) PRIMARY KEY, \"UserAccountId\" integer NOT NULL REFERENCES \"UserAccounts\" (\"Id\") ON DELETE CASCADE, \"CreatedAt\" timestamp with time zone NOT NULL, \"ExpiresAt\" timestamp with time zone NOT NULL, \"UsedAt\" timestamp with time zone NULL)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_PasswordResetTokens_UserAccountId_ExpiresAt\" ON \"PasswordResetTokens\" (\"UserAccountId\", \"ExpiresAt\")");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"SubscriptionPlans\" (\"Code\" character varying(24) PRIMARY KEY, \"Name\" character varying(48) NOT NULL, \"PriceKes\" integer NOT NULL, \"MaxProperties\" integer NOT NULL, \"MaxDevices\" integer NOT NULL, \"AnomalyDetection\" boolean NOT NULL, \"Analytics\" boolean NOT NULL, \"IncidentManagement\" boolean NOT NULL, \"SecurityIntelligence\" boolean NOT NULL, \"MultipleStaffAccounts\" boolean NOT NULL, \"AdvancedReports\" boolean NOT NULL, \"PrioritySupport\" boolean NOT NULL)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"Subscriptions\" (\"Id\" bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, \"UserId\" integer NOT NULL REFERENCES \"UserAccounts\" (\"Id\") ON DELETE CASCADE, \"PlanCode\" character varying(24) NOT NULL REFERENCES \"SubscriptionPlans\" (\"Code\") ON DELETE RESTRICT, \"Status\" character varying(24) NOT NULL, \"TrialStart\" timestamp with time zone NULL, \"TrialEnd\" timestamp with time zone NULL, \"CurrentPeriodStart\" timestamp with time zone NULL, \"CurrentPeriodEnd\" timestamp with time zone NULL, \"CancelAtPeriodEnd\" boolean NOT NULL, \"CreatedAt\" timestamp with time zone NOT NULL, \"UpdatedAt\" timestamp with time zone NOT NULL)");
+        db.Database.ExecuteSqlRaw("CREATE INDEX IF NOT EXISTS \"IX_Subscriptions_UserId_Status\" ON \"Subscriptions\" (\"UserId\", \"Status\")");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"PaymentTransactions\" (\"Id\" uuid PRIMARY KEY, \"UserId\" integer NOT NULL REFERENCES \"UserAccounts\" (\"Id\") ON DELETE CASCADE, \"SubscriptionId\" bigint NOT NULL REFERENCES \"Subscriptions\" (\"Id\") ON DELETE RESTRICT, \"PlanCode\" character varying(24) NOT NULL REFERENCES \"SubscriptionPlans\" (\"Code\") ON DELETE RESTRICT, \"AmountKes\" integer NOT NULL, \"PhoneNumber\" character varying(16) NOT NULL, \"Status\" character varying(24) NOT NULL, \"MerchantRequestId\" text NULL, \"CheckoutRequestId\" character varying(128) NULL, \"ResponseDescription\" text NULL, \"ResultCode\" integer NULL, \"MpesaReceiptNumber\" character varying(40) NULL, \"InitiatedAt\" timestamp with time zone NOT NULL, \"CompletedAt\" timestamp with time zone NULL)");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_PaymentTransactions_CheckoutRequestId\" ON \"PaymentTransactions\" (\"CheckoutRequestId\")");
+        db.Database.ExecuteSqlRaw("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_PaymentTransactions_MpesaReceiptNumber\" ON \"PaymentTransactions\" (\"MpesaReceiptNumber\")");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"Payments\" (\"Id\" uuid PRIMARY KEY, \"PaymentTransactionId\" uuid NOT NULL UNIQUE REFERENCES \"PaymentTransactions\" (\"Id\") ON DELETE RESTRICT, \"UserId\" integer NOT NULL REFERENCES \"UserAccounts\" (\"Id\") ON DELETE CASCADE, \"SubscriptionId\" bigint NOT NULL REFERENCES \"Subscriptions\" (\"Id\") ON DELETE RESTRICT, \"AmountKes\" integer NOT NULL, \"MpesaReceiptNumber\" character varying(40) NOT NULL UNIQUE, \"PaidAt\" timestamp with time zone NOT NULL)");
+        db.Database.ExecuteSqlRaw("CREATE TABLE IF NOT EXISTS \"Invoices\" (\"Id\" uuid PRIMARY KEY, \"InvoiceNumber\" character varying(40) NOT NULL UNIQUE, \"PaymentId\" uuid NOT NULL UNIQUE REFERENCES \"Payments\" (\"Id\") ON DELETE RESTRICT, \"UserId\" integer NOT NULL REFERENCES \"UserAccounts\" (\"Id\") ON DELETE CASCADE, \"SubscriptionId\" bigint NOT NULL REFERENCES \"Subscriptions\" (\"Id\") ON DELETE RESTRICT, \"AmountKes\" integer NOT NULL, \"Currency\" character varying(3) NOT NULL, \"IssuedAt\" timestamp with time zone NOT NULL)");
+        return;
+    }
+
+    throw new InvalidOperationException("SmartGuard billing schema supports SQLite and PostgreSQL only.");
+}

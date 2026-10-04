@@ -16,7 +16,8 @@ public class SettingsController : ControllerBase
         ["anomalyDetectionEnabled"] = "true",
         ["alertNotificationsEnabled"] = "true",
         ["maintenanceMode"] = "false",
-        ["riskThreshold"] = "70"
+        ["riskThreshold"] = "70",
+        ["alertEscalationMinutes"] = "10"
     };
 
     private readonly AppDbContext _context;
@@ -65,9 +66,12 @@ public class SettingsController : ControllerBase
         return Ok(setting);
     }
 
-    private static bool IsValidValue(string name, string value) => name == "riskThreshold"
-        ? int.TryParse(value, out var threshold) && threshold is >= 0 and <= 100
-        : bool.TryParse(value, out _);
+    private static bool IsValidValue(string name, string value) => name switch
+    {
+        "riskThreshold" => int.TryParse(value, out var threshold) && threshold is >= 0 and <= 100,
+        "alertEscalationMinutes" => int.TryParse(value, out var minutes) && minutes is >= 1 and <= 240,
+        _ => bool.TryParse(value, out _)
+    };
 }
 
 public class UpdateSettingRequest

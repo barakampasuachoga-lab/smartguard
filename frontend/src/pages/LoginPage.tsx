@@ -132,6 +132,10 @@ export default function LoginPage() {
             </div>
           </div>
 
+          <div style={{ marginTop: -10, textAlign: 'right' }}>
+            <Link to="/forgot-password" style={{ color: '#7dd3fc', fontSize: 13 }}>Forgot password?</Link>
+          </div>
+
           {error ? (
             <div style={{ color: '#fca5a5', background: 'rgba(127, 29, 29, 0.35)', border: '1px solid rgba(248, 113, 113, 0.4)', padding: '0.7rem 0.8rem', borderRadius: 12, fontSize: 14 }}>
               {error}

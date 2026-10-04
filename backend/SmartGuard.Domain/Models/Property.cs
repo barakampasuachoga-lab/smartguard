@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SmartGuard.Domain.Models;
 
 public class Property
@@ -9,6 +11,8 @@ public class Property
     public string Owner { get; set; } = string.Empty;
     public int? OwnerUserId { get; set; }
     public PropertyStatus Status { get; set; } = PropertyStatus.Home;
+    [JsonIgnore]
+    public string SecurityScheduleJson { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 

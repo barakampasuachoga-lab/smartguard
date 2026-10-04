@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Security.Cryptography;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using SmartGuard.API.Models;
@@ -20,14 +21,16 @@ public class AuthController : ControllerBase
     private readonly JwtTokenService _jwtTokenService;
     private readonly IWebHostEnvironment _environment;
     private readonly SmtpEmailSender _emailSender;
+    private readonly SubscriptionService? _subscriptionService;
     private readonly ILogger<AuthController> _logger;
 
-    public AuthController(AppDbContext context, JwtTokenService jwtTokenService, IWebHostEnvironment environment, SmtpEmailSender? emailSender = null, ILogger<AuthController>? logger = null)
+    public AuthController(AppDbContext context, JwtTokenService jwtTokenService, IWebHostEnvironment environment, SmtpEmailSender? emailSender = null, ILogger<AuthController>? logger = null, SubscriptionService? subscriptionService = null)
     {
         _context = context;
         _jwtTokenService = jwtTokenService;
         _environment = environment;
         _emailSender = emailSender ?? new SmtpEmailSender(new ConfigurationBuilder().Build());
+        _subscriptionService = subscriptionService;
         _logger = logger ?? NullLogger<AuthController>.Instance;
     }
 
@@ -172,6 +175,10 @@ public class AuthController : ControllerBase
         try
         {
             await _context.SaveChangesAsync();
+            if (_subscriptionService is not null)
+            {
+                await _subscriptionService.EnsureSubscriptionAsync(user.Id);
+            }
         }
         catch
         {
@@ -193,6 +200,117 @@ public class AuthController : ControllerBase
                 LastLoginAt = user.LastLoginAt,
             }
         });
+    }
+
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken cancellationToken)
+    {
+        var email = request.Email.Trim();
+        if (!new EmailAddressAttribute().IsValid(email))
+        {
+            return BadRequest(new { message = "Enter a valid email address." });
+        }
+
+        if (!_emailSender.IsConfigured)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                message = "Password reset email is not configured yet. Please contact support."
+            });
+        }
+
+        var genericResponse = new { message = "If an account exists for that email, a password reset link will be sent." };
+        var user = await _context.UserAccounts.FirstOrDefaultAsync(x => x.Email.ToLower() == email.ToLower(), cancellationToken);
+        if (user is null)
+        {
+            return Ok(genericResponse);
+        }
+
+        var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        var tokenHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token)));
+        var now = DateTimeOffset.UtcNow;
+
+        var previousTokens = await _context.PasswordResetTokens
+            .Where(x => x.UserAccountId == user.Id)
+            .ToListAsync(cancellationToken);
+        _context.PasswordResetTokens.RemoveRange(previousTokens);
+        _context.PasswordResetTokens.Add(new PasswordResetToken
+        {
+            TokenHash = tokenHash,
+            UserAccountId = user.Id,
+            CreatedAt = now,
+            ExpiresAt = now.AddMinutes(30)
+        });
+        await _context.SaveChangesAsync(cancellationToken);
+
+        var baseUrl = (HttpContext.RequestServices.GetRequiredService<IConfiguration>()["App:FrontendBaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+        var resetLink = $"{baseUrl}/reset-password?token={Uri.EscapeDataString(token)}";
+        var emailBody = $"Hello {user.FullName},\r\n\r\nUse this link to reset your SmartGuard password. It expires in 30 minutes and can only be used once:\r\n\r\n{resetLink}\r\n\r\nIf you did not request a password reset, you can ignore this email.";
+
+        try
+        {
+            await _emailSender.SendAsync(user.Email, "Reset your SmartGuard password", emailBody, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var failedToken = await _context.PasswordResetTokens.FirstOrDefaultAsync(x => x.TokenHash == tokenHash, cancellationToken);
+            if (failedToken is not null)
+            {
+                _context.PasswordResetTokens.Remove(failedToken);
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+            _logger.LogError(exception, "Failed to send a password reset email for SmartGuard user {UserId}.", user.Id);
+        }
+
+        return Ok(genericResponse);
+    }
+
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Token))
+        {
+            return BadRequest(new { message = "The password reset link is invalid or has expired. Request a new link and try again." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length < 8 || request.NewPassword.Length > 128)
+        {
+            return BadRequest(new { message = "Your new password must be between 8 and 128 characters." });
+        }
+
+        var tokenHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(request.Token)));
+        var now = DateTimeOffset.UtcNow;
+        var resetToken = await _context.PasswordResetTokens
+            .FirstOrDefaultAsync(x => x.TokenHash == tokenHash, cancellationToken);
+        if (resetToken is null || resetToken.UsedAt is not null || resetToken.ExpiresAt <= now)
+        {
+            return BadRequest(new { message = "The password reset link is invalid or has expired. Request a new link and try again." });
+        }
+
+        var user = await _context.UserAccounts.FirstOrDefaultAsync(x => x.Id == resetToken.UserAccountId, cancellationToken);
+        if (user is null)
+        {
+            return BadRequest(new { message = "The password reset link is invalid or has expired. Request a new link and try again." });
+        }
+
+        user.PasswordHash = PasswordHasher.Hash(request.NewPassword);
+        var outstandingTokens = await _context.PasswordResetTokens
+            .Where(x => x.UserAccountId == user.Id)
+            .ToListAsync(cancellationToken);
+        foreach (var outstandingToken in outstandingTokens)
+        {
+            outstandingToken.UsedAt = now;
+        }
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return Ok(new { message = "Your password has been reset. You can now sign in." });
     }
 
     [HttpPost("login")]
@@ -298,6 +416,20 @@ public class AuthController : ControllerBase
             .ToListAsync())
             .OrderByDescending(x => x.CreatedAt)
             .ToList();
+        var subscription = (await _context.Subscriptions.AsNoTracking()
+                .Where(x => x.UserId == user.Id)
+                .ToListAsync())
+            .OrderByDescending(x => x.CreatedAt)
+            .FirstOrDefault();
+        var subscriptionPlan = subscription is null
+            ? null
+            : await _context.SubscriptionPlans.AsNoTracking().FirstOrDefaultAsync(x => x.Code == subscription.PlanCode);
+        var paymentTransactions = (await _context.PaymentTransactions.AsNoTracking()
+                .Where(x => x.UserId == user.Id)
+                .ToListAsync())
+            .OrderByDescending(x => x.InitiatedAt)
+            .Take(20)
+            .ToList();
 
         return Ok(new
         {
@@ -316,7 +448,10 @@ public class AuthController : ControllerBase
             properties,
             events,
             alerts,
-            reports
+            reports,
+            subscription,
+            subscriptionPlan,
+            paymentTransactions
         });
     }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Bell, Gauge, Wrench } from 'lucide-react';
+import { Activity, Bell, Gauge, Wrench, Clock3 } from 'lucide-react';
 import { getSettings, updateSetting } from '../api';
 import type { SystemSetting } from '../types';
 
@@ -8,6 +8,7 @@ const settingDetails = [
   { name: 'alertNotificationsEnabled', label: 'Alert notifications', description: 'Allow the platform to surface priority alert notifications.', icon: Bell },
   { name: 'maintenanceMode', label: 'Maintenance mode', description: 'Mark the system as undergoing scheduled maintenance.', icon: Wrench },
   { name: 'riskThreshold', label: 'Risk score threshold', description: 'Risk scores at or above this value are treated as high priority.', icon: Gauge },
+  { name: 'alertEscalationMinutes', label: 'Alert escalation delay', description: 'Notify assigned security contacts if an alert remains unacknowledged after this many minutes.', icon: Clock3 },
 ];
 
 export default function SettingsPage() {
@@ -38,14 +39,14 @@ export default function SettingsPage() {
       <div className="settings-list">
         {settingDetails.map(({ name, label, description, icon: Icon }) => {
           const value = settings.find(setting => setting.name === name)?.value;
-          const isBoolean = name !== 'riskThreshold';
+          const isBoolean = name === 'anomalyDetectionEnabled' || name === 'alertNotificationsEnabled' || name === 'maintenanceMode';
           return <article className="setting-row" key={name}>
             <div className="setting-icon"><Icon size={18} /></div>
             <div className="setting-copy"><strong>{label}</strong><span>{description}</span></div>
             {isBoolean ? <label className="setting-toggle" aria-label={label}>
               <input type="checkbox" checked={value === 'true'} disabled={saving === name || value === undefined} onChange={event => void changeSetting(name, String(event.target.checked))} />
               <span />
-            </label> : <label className="threshold-input"><input type="number" min="0" max="100" value={value ?? ''} disabled={saving === name} onChange={event => setSettings(current => current.map(setting => setting.name === name ? { ...setting, value: event.target.value } : setting))} onBlur={event => { if (event.target.value) void changeSetting(name, event.target.value); }} /><span>/ 100</span></label>}
+          </label> : <label className="threshold-input"><input type="number" min={name === 'riskThreshold' ? '0' : '1'} max={name === 'riskThreshold' ? '100' : '240'} value={value ?? ''} disabled={saving === name} onChange={event => setSettings(current => current.map(setting => setting.name === name ? { ...setting, value: event.target.value } : setting))} onBlur={event => { if (event.target.value) void changeSetting(name, event.target.value); }} /><span>{name === 'riskThreshold' ? '/ 100' : 'minutes'}</span></label>}
           </article>;
         })}
       </div>
