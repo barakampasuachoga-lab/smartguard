@@ -1,0 +1,9 @@
+.git
+.vs
+.idea
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/.env*
+build.log

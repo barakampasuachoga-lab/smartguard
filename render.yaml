@@ -1,0 +1,49 @@
+databases:
+  - name: smartguard-db
+    databaseName: smartguard
+    user: smartguard
+    plan: free # Free Postgres expires 30 days after creation; upgrade for persistent production data.
+    region: singapore
+
+services:
+  - type: web
+    name: smartguard
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    healthCheckPath: /healthz
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: ASPNETCORE_URLS
+        value: http://0.0.0.0:10000
+      - key: Database__Provider
+        value: Postgres
+      - key: ConnectionStrings__Postgres
+        fromDatabase:
+          name: smartguard-db
+          property: connectionString
+      - key: Jwt__Key
+        generateValue: true
+      - key: App__FrontendBaseUrl
+        fromService:
+          type: web
+          name: smartguard
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: Daraja__BaseUrl
+        value: https://sandbox.safaricom.co.ke
+      - key: Daraja__TransactionType
+        value: CustomerPayBillOnline
+      - key: Daraja__ConsumerKey
+        sync: false
+      - key: Daraja__ConsumerSecret
+        sync: false
+      - key: Daraja__ShortCode
+        sync: false
+      - key: Daraja__Passkey
+        sync: false
+      - key: Daraja__CallbackToken
+        sync: false

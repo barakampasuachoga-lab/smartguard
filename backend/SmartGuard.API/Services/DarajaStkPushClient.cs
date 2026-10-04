@@ -17,7 +17,7 @@ public sealed class DarajaStkPushClient(IHttpClientFactory httpClientFactory, IC
         !string.IsNullOrWhiteSpace(configuration["Daraja:ConsumerSecret"]) &&
         !string.IsNullOrWhiteSpace(configuration["Daraja:ShortCode"]) &&
         !string.IsNullOrWhiteSpace(configuration["Daraja:Passkey"]) &&
-        !string.IsNullOrWhiteSpace(configuration["Daraja:CallbackUrl"]) &&
+        (!string.IsNullOrWhiteSpace(configuration["Daraja:CallbackUrl"]) || !string.IsNullOrWhiteSpace(configuration["RENDER_EXTERNAL_URL"])) &&
         !string.IsNullOrWhiteSpace(configuration["Daraja:CallbackToken"]);
 
     public async Task<StkPushResult> InitiateAsync(int amountKes, string phone, string reference, CancellationToken cancellationToken)
@@ -28,7 +28,11 @@ public sealed class DarajaStkPushClient(IHttpClientFactory httpClientFactory, IC
         }
 
         var baseUrl = (configuration["Daraja:BaseUrl"] ?? "https://sandbox.safaricom.co.ke").TrimEnd('/');
-        var callbackUrl = configuration["Daraja:CallbackUrl"]!;
+        var callbackUrl = configuration["Daraja:CallbackUrl"];
+        if (string.IsNullOrWhiteSpace(callbackUrl) && Uri.TryCreate(configuration["RENDER_EXTERNAL_URL"], UriKind.Absolute, out var renderUrl))
+        {
+            callbackUrl = $"{renderUrl.ToString().TrimEnd('/')}/api/payments/mpesa/callback/{Uri.EscapeDataString(configuration["Daraja:CallbackToken"]!)}";
+        }
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) || baseUri.Host is not ("sandbox.safaricom.co.ke" or "api.safaricom.co.ke"))
         {
             throw new InvalidOperationException("Daraja BaseUrl must be the Safaricom sandbox or production endpoint.");

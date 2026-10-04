@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Npgsql;
 using SmartGuard.API.Services;
 using SmartGuard.Application.Auth;
 using SmartGuard.Application.Services;
@@ -55,6 +56,10 @@ var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SmartGuard";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "SmartGuardUsers";
 
 var postgresConnection = builder.Configuration.GetConnectionString("Postgres");
+if (!string.IsNullOrWhiteSpace(postgresConnection))
+{
+    postgresConnection = NormalizePostgresConnectionString(postgresConnection);
+}
 var usePostgres = string.Equals(builder.Configuration["Database:Provider"], "Postgres", StringComparison.OrdinalIgnoreCase)
     || !string.IsNullOrWhiteSpace(postgresConnection);
 builder.Services.AddDbContext<AppDbContext>(options =>
@@ -390,13 +395,43 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("FrontendPolicy");
+app.UseDefaultFiles();
 app.UseStaticFiles();
 // app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+app.MapFallback("/api/{**path}", () => Results.NotFound());
+app.MapFallbackToFile("index.html");
 
 app.Run();
+
+static string NormalizePostgresConnectionString(string connectionString)
+{
+    if (!Uri.TryCreate(connectionString, UriKind.Absolute, out var databaseUri)
+        || databaseUri.Scheme is not ("postgres" or "postgresql"))
+    {
+        return connectionString;
+    }
+
+    var credentials = databaseUri.UserInfo.Split(':', 2);
+    if (credentials.Length != 2)
+    {
+        throw new InvalidOperationException("The PostgreSQL URL must contain both a username and password.");
+    }
+
+    var npgsql = new NpgsqlConnectionStringBuilder
+    {
+        Host = databaseUri.Host,
+        Port = databaseUri.Port > 0 ? databaseUri.Port : 5432,
+        Database = Uri.UnescapeDataString(databaseUri.AbsolutePath.TrimStart('/')),
+        Username = Uri.UnescapeDataString(credentials[0]),
+        Password = Uri.UnescapeDataString(credentials[1]),
+        SslMode = SslMode.Require
+    };
+    return npgsql.ConnectionString;
+}
 
 static void EnsureSqliteColumn(AppDbContext db, string table, string column, string definition)
 {

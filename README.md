@@ -58,3 +58,9 @@ The optional PostgreSQL provider is selected by setting `Database:Provider` to `
 $env:ConnectionStrings__Postgres = "Host=localhost;Database=smartguard;Username=<user>;Password=<password>"
 $env:Database__Provider = "Postgres"
 ```
+
+## Deploy to Render
+
+The repository includes a Render Blueprint (`render.yaml`) and a multi-stage Dockerfile. In Render, create a new Blueprint connected to this GitHub repository and its `main` branch. Review the Blueprint, enter the requested Daraja sandbox secrets, and apply it. The app and API share one service URL, the frontend is served by ASP.NET Core, and the Blueprint provisions PostgreSQL in Singapore. The M-PESA callback URL is formed from Render's HTTPS service URL and the callback token.
+
+The Blueprint uses Render's Free plans to avoid starting a paid service. Free Render Postgres expires 30 days after creation and is eventually deleted if not upgraded; free web services may sleep when idle and cannot send outbound SMTP on ports 25, 465, or 587. These settings are for a temporary demonstration. Upgrade PostgreSQL before relying on long-lived user, subscription, or payment records. Uploaded property/profile images are stored on the web service filesystem and need durable object storage or a paid persistent disk for long-term retention. Configure email delivery through an available HTTPS provider or paid service if password-reset email delivery is required in production.

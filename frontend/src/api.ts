@@ -5,12 +5,17 @@ const api = axios.create({
   baseURL: '/api',
 });
 
+const getAssetBaseUrl = () => {
+  const { hostname, origin } = window.location;
+  return hostname === 'localhost' || hostname === '127.0.0.1' ? 'http://localhost:5156' : origin;
+};
+
 export const getProfilePhotoUrl = (path?: string | null) => path
-  ? new URL(path, 'http://localhost:5156').toString()
+  ? new URL(path, getAssetBaseUrl()).toString()
   : null;
 
 export const getPropertyPhotoUrl = (path?: string | null) => path
-  ? new URL(path, 'http://localhost:5156').toString()
+  ? new URL(path, getAssetBaseUrl()).toString()
   : null;
 
 api.interceptors.request.use((config) => {
